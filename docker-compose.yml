@@ -1,0 +1,20 @@
+services:
+  # The "Movie Storage Server" from the architecture diagram. Runs entirely on
+  # its own — the cache server (../cacheserver) reaches it over the network,
+  # never bundled into the same compose project. Locally that means "the host
+  # machine's published ports"; on the real deployment it means "a separate
+  # VPS's address" — same image and config either way.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-myanflix}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-locally}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
