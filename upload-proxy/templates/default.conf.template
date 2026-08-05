@@ -1,0 +1,67 @@
+upstream storage_origin {
+    server ${STORAGE_ORIGIN};
+    # Reuses connections to MinIO across requests instead of a fresh TCP
+    # handshake per part/file — meaningful at the concurrency levels the
+    # admin's small-file worker pool uses.
+    keepalive 32;
+}
+
+server {
+    # Local dev: plain HTTP, matching ../../cacheserver's own local setup.
+    #
+    # PRODUCTION TODO (ops): this must be re-fronted with TLS + HTTP/2
+    # ("listen 443 ssl http2;" + ssl_certificate/ssl_certificate_key) before
+    # going live — two independent hard requirements, not one:
+    #  1. Mixed content: an HTTPS admin app cannot PUT to a plain-HTTP
+    #     endpoint at all; browsers block it outright.
+    #  2. HTTP/2 specifically (not just HTTPS) is required for the
+    #     thousands-of-small-HLS-segments case to actually achieve its
+    #     designed concurrency — HTTP/1.1 caps the browser to ~6 connections
+    #     per origin, which silently throttles the frontend's ~16-worker
+    #     small-file pool down to ~6-way real concurrency (see the upload
+    #     migration plan's throughput analysis for the concrete numbers).
+    # This repo has no existing TLS-termination convention to copy from
+    # (checked: no cert/proxy config for the rest of the stack either) —
+    # confirm with ops how prod TLS is actually terminated before wiring
+    # this in, rather than inventing an independent scheme here.
+    listen 8443;
+    server_name _;
+
+    # Comfortably above the 32MB multipart part size (see
+    # MultipartUploadService.MULTIPART_PART_SIZE in the backend) with
+    # headroom for a future part-size change — nginx's own default is 1MB,
+    # which would reject every part outright.
+    client_max_body_size 100m;
+
+    location / {
+        proxy_pass http://storage_origin;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # $http_host, not $host — nginx's $host strips the port, but the
+        # presigned URL's SigV4 signature was computed including the port
+        # (this proxy listens on a non-standard port, 8443) — forwarding a
+        # port-stripped Host header here makes MinIO recompute a different
+        # signature than the one the client sent, and every presigned
+        # request fails with SignatureDoesNotMatch. Confirmed by hitting
+        # this for real: identical presigned URL worked PUT directly to
+        # MinIO's own port, failed only through this proxy, until this was
+        # fixed.
+        proxy_set_header Host $http_host;
+
+        # THE critical setting for this proxy's entire purpose: without
+        # this, nginx buffers the full request body to its own local disk
+        # before forwarding it upstream — which would silently reintroduce
+        # exactly the disk hop this migration exists to remove, just moved
+        # from the backend to this box instead.
+        proxy_request_buffering off;
+
+        # No proxy_cache here, unlike ../../cacheserver's read-side proxy —
+        # writes are never cacheable.
+
+        # No CORS headers added here — MinIO itself answers
+        # Access-Control-* headers (including the PUT preflight) once its
+        # bucket CORS is configured (see MinioService.ensureCors()), so this
+        # proxy only needs to pass PUT/OPTIONS through untouched, not
+        # duplicate or override what MinIO already sends.
+    }
+}

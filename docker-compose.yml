@@ -10,11 +10,34 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-myanflix}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-locally}
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_API_CORS_ALLOW_ORIGIN:-http://localhost:3002}
     ports:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
+
+  # Write-side proxy for direct browser->MinIO uploads (presigned multipart
+  # + presigned single-PUT for small files — see backend's
+  # MultipartUploadService). MinIO's own port is never exposed to the
+  # public internet directly; this is the one thing that is. Deliberately a
+  # separate proxy from ../cacheserver's read-side one — different
+  # buffering/caching/body-size needs (see upload-proxy/templates), not just
+  # a different port on the same config.
+  upload-proxy:
+    image: nginx:alpine
+    environment:
+      # Local: reaches this same compose project's minio service directly.
+      # Real deployment: same address the backend's own MINIO_ENDPOINT
+      # already uses to reach MinIO server-side — nothing else changes.
+      STORAGE_ORIGIN: ${STORAGE_ORIGIN:-minio:9000}
+    ports:
+      - "${UPLOAD_PROXY_PORT:-8443}:8443"
+    volumes:
+      - ./upload-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./upload-proxy/templates:/etc/nginx/templates:ro
+    depends_on:
+      - minio
 
 volumes:
   minio-data:
