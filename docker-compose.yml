@@ -15,7 +15,24 @@ services:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
-      - minio-data:/data
+      # Where the object store physically lives.
+      #
+      # Unset — production, CI, a fresh clone — this resolves to the
+      # `minio-data` named volume declared at the bottom of this file, which is
+      # the long-standing behaviour and needs no configuration anywhere.
+      #
+      # Set to an absolute host path it becomes a bind mount instead, which is
+      # how a local machine keeps a multi-GB library on an external drive
+      # rather than inside Docker's VM disk image. Compose's short volume
+      # syntax accepts either a volume name or a host path in this position,
+      # which is what lets ONE variable switch between them — Compose has no
+      # conditionals, so the value itself has to carry the choice.
+      #
+      # The two are separate stores: changing this does not migrate anything.
+      # If the path is missing at startup Docker silently creates an empty
+      # directory there and MinIO comes up with an empty bucket — mount the
+      # drive first.
+      - ${MINIO_DATA_PATH:-minio-data}:/data
 
   # Write-side proxy for direct browser->MinIO uploads (presigned multipart
   # + presigned single-PUT for small files — see backend's
