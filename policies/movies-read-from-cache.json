@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AnonymousReadOnlyFromCacheServers",
+      "Effect": "Allow",
+      "Principal": { "AWS": ["*"] },
+      "Action": ["s3:GetObject"],
+      "Resource": [
+        "arn:aws:s3:::movies/images/*",
+        "arn:aws:s3:::movies/videos/*/hls/*",
+        "arn:aws:s3:::movies/audio/*/hls/*",
+        "arn:aws:s3:::movies/subtitles/*",
+        "arn:aws:s3:::movies/books/*"
+      ],
+      "Condition": {
+        "IpAddress": {
+          "aws:SourceIp": [
+            "213.111.155.181/32",
+            "REPLACE_WITH_SECOND_CACHE_SERVER_IP/32"
+          ]
+        }
+      }
+    }
+  ]
+}

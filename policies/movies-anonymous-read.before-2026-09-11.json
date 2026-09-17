@@ -1,0 +1,1 @@
+{"Statement":[{"Action":["s3:GetObject"],"Effect":"Allow","Principal":{"AWS":["*"]},"Resource":["arn:aws:s3:::movies/*"]}],"Version":"2012-10-17"}
