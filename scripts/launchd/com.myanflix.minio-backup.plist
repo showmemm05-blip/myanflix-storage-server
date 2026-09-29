@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily MinIO media backup on the owner's Mac: runs scripts/minio-backup.sh
+  at 04:00 (or at the next wake). NOT loaded by the repo. Install and check
+  it with the steps in README.md, "Backups":
+
+    cp scripts/launchd/com.myanflix.minio-backup.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.myanflix.minio-backup.plist
+    launchctl kickstart gui/$(id -u)/com.myanflix.minio-backup
+    tail ~/Library/Logs/myanflix-minio-backup.log
+
+  The destination comes from MINIO_BACKUP_TARGET in storage-server/.env.
+  The paths below are this Mac's; change them if the repo moves. macOS does
+  not let background jobs read ~/Desktop (or write to an external drive)
+  until /bin/bash is given Full Disk Access (System Settings > Privacy &
+  Security); "Operation not permitted" in the log means exactly that.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.myanflix.minio-backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/pc/Desktop/MyanFlix/storage-server/scripts/minio-backup.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/pc/Library/Logs/myanflix-minio-backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/pc/Library/Logs/myanflix-minio-backup.log</string>
+</dict>
+</plist>

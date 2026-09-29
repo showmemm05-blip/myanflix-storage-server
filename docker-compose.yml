@@ -6,6 +6,9 @@ services:
   # VPS's address" — same image and config either way.
   minio:
     image: minio/minio:latest
+    # Without this, a crash or host reboot leaves the service down until
+    # someone notices and starts it by hand.
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-myanflix}
@@ -43,6 +46,7 @@ services:
   # a different port on the same config.
   upload-proxy:
     image: nginx:alpine
+    restart: unless-stopped
     environment:
       # Local: reaches this same compose project's minio service directly.
       # Real deployment: same address the backend's own MINIO_ENDPOINT
