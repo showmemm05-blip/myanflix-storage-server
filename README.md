@@ -15,7 +15,7 @@ docker compose up -d
 
 - MinIO API: `http://localhost:9000` (S3-compatible)
 - MinIO console: `http://localhost:9001` (log in with the credentials from `.env`)
-- Upload proxy: `http://localhost:8443` (presigned browser uploads only)
+- Upload proxy: `http://localhost:8443` (presigned browser uploads only: `PUT`/`POST`/`OPTIONS` under `movies/{videos,subtitles,temp,documents}/`, 403 for everything else)
 
 ## Who may read the bucket
 
@@ -318,12 +318,100 @@ the command's exit code.
 
    A 200 on any of the last three means the bucket-wide policy is still
    applied. Finally play a title end to end through the website.
-5. **Not done here, on purpose:** the upload proxy still forwards every HTTP
-   method. Limiting it to `PUT`/`OPTIONS` is safe only once it is confirmed
-   that the backend's production `MINIO_ENDPOINT` points at `:9000` and not
-   at this proxy (multipart create/complete are `POST`, head/list are `GET`).
-   Confirm that, then add `limit_except PUT OPTIONS { deny all; }` inside
-   `location /`.
+5. **Upload proxy: uploads only (done in the template, 2026-10-06, M-25).**
+   `upload-proxy/templates/default.conf.template` now forwards only
+   `PUT`/`POST`/`OPTIONS` under `/movies/{videos,subtitles,temp,documents}/`
+   and answers **403 itself** for everything else (`/minio/health/*`,
+   `/minio/admin/*`, the bucket root, `DELETE`, other buckets). The access
+   log also records `$uri` instead of the full request line, so the signed
+   query string (`X-Amz-Credential`, `X-Amz-Signature`) never lands in a
+   log. Before pulling it on the storage VPS, confirm the backend's
+   production `MINIO_ENDPOINT` points at `:9000` and **not** at this proxy:
+   multipart create/complete, HEAD and LIST go backend→MinIO directly and
+   would be refused here. Then `docker compose up -d --force-recreate
+   upload-proxy` and check from outside (your Mac):
+
+   ```bash
+   S=213.111.145.206
+   curl -s -o /dev/null -w '%{http_code}\n' http://$S:8443/minio/health/live        # 403 (was 200)
+   curl -s -o /dev/null -w '%{http_code}\n' http://$S:8443/minio/admin/v3/info      # 403, no X-Amz-Request-Id
+   curl -s -o /dev/null -w '%{http_code}\n' -X DELETE http://$S:8443/movies/temp/x  # 403 from nginx
+   curl -s -o /dev/null -w '%{http_code}\n' http://$S:8443/movies/images/x.jpg      # 403
+   curl -s -D - -o /dev/null -X PUT http://$S:8443/movies/temp/probe.txt | grep -i x-amz-request-id
+   # -> an X-Amz-Request-Id line: the PUT reached MinIO (which refuses it unsigned, 403 AccessDenied)
+   ```
+
+   then upload a small poster and a subtitle from the admin app: both must
+   still succeed. If a bucket or upload prefix is ever renamed, the
+   `location ~ ^/movies/(...)/` line in the template is the one place to
+   keep in step.
+
+## Backend: stop using the MinIO root account (owner task, M-25)
+
+Today `backend/.env` `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` are the storage
+server's `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`. Root can do anything on
+MinIO, including the admin API (create users, rewrite the bucket policy,
+delete the bucket), so one leaked `backend/.env` is the whole media store.
+The backend only needs the S3 API on the `movies` bucket. Give it a
+dedicated user with exactly that, and keep root for `mc` on the storage box.
+
+Run on the **storage VPS** (or on this Mac for the local rig, with
+`docker compose exec -T minio mc ...` instead of `mc ...` and `local`
+instead of `remote`). Nothing below prints the root password. The new
+user's secret is the one you generate in step 2: paste it straight into
+`backend/.env`, never into a chat, a doc or a ticket.
+
+```bash
+# 0. mc signed in as root (one-time; same alias the policy steps above use).
+mc alias set remote http://<storage>:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+
+# 1. A policy that is the S3 API on the movies bucket and nothing else
+#    (no admin:*, no other bucket). s3:* on the bucket ARN covers what the
+#    backend does on the bucket itself (HeadBucket/CreateBucket, PutBucketCors,
+#    ListBucket, ListBucketMultipartUploads); s3:* on movies/* covers every
+#    object call, multipart parts and presigning.
+cat > /tmp/myanflix-backend-policy.json <<'POLICY'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:*"],
+      "Resource": ["arn:aws:s3:::movies", "arn:aws:s3:::movies/*"]
+    }
+  ]
+}
+POLICY
+mc admin policy create remote myanflix-backend /tmp/myanflix-backend-policy.json
+rm /tmp/myanflix-backend-policy.json
+
+# 2. The backend's own user. Generate the secret, keep it in your clipboard only.
+SECRET="$(openssl rand -hex 24)"
+mc admin user add remote myanflix-backend "$SECRET"
+mc admin policy attach remote myanflix-backend --user myanflix-backend
+mc admin user info remote myanflix-backend     # must show PolicyName: myanflix-backend, Status: enabled
+
+# 3. Prove the new user is NOT an admin and CAN use the bucket (from your Mac
+#    while :9000 is still reachable, or from the API VPS):
+mc alias set check http://<storage>:9000 myanflix-backend "$SECRET"
+mc admin info check                            # must FAIL with Access Denied
+mc ls check/movies | head -3                   # must list objects
+echo probe | mc pipe check/movies/temp/svc-probe.txt && mc rm check/movies/temp/svc-probe.txt   # must work
+mc alias rm check
+```
+
+Then on the **API VPS**: set `MINIO_ACCESS_KEY=myanflix-backend` and
+`MINIO_SECRET_KEY=<the secret>` in `backend/.env`,
+`docker compose up -d --force-recreate backend`, and from the admin app
+upload a poster, a subtitle and a chapter PDF, play one title, and open one
+bank screenshot. All of these sign with the new user; if any fails with
+`AccessDenied`, `mc admin user info remote myanflix-backend` is the first
+thing to check. Finally rotate root (`MINIO_ROOT_PASSWORD` in
+`storage-server/.env`, `docker compose up -d --force-recreate minio`),
+since the old value lived on two VPSes for months. Until this is done, the
+proxy change above already stops a leaked key from reaching the admin API
+from the internet; it can still reach it from the API VPS on `:9000`, which
+is why this step matters.
 
 ## Backups (media)
 

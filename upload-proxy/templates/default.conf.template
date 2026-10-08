@@ -33,7 +33,36 @@ server {
     # which would reject every part outright.
     client_max_body_size 100m;
 
-    location / {
+    # ---------------------------------------------------------------------
+    # What this public port is FOR, and nothing else (security audit
+    # 2026-10-06, M-25): presigned browser uploads. The backend only ever
+    # presigns PutObject and UploadPart (PUT) for keys that
+    # ResourceUploadTypeRegistry.buildKey builds under these four prefixes of
+    # the `movies` bucket (MINIO_BUCKET):
+    #   videos/<movieId>/...         movie bundle (HLS, original)
+    #   subtitles/<movieId>/...      subtitle sources
+    #   temp/video-replace/...       video replace staging
+    #   documents/books/<bookId>/... chapter PDFs
+    # Multipart create/complete/abort, HEAD/GET/LIST and every admin call go
+    # from the backend straight to MinIO on :9000 (MINIO_ENDPOINT), never
+    # through here. So anything that is not PUT/POST/OPTIONS under those
+    # prefixes is refused by nginx itself (403, no X-Amz-Request-Id) and
+    # never reaches MinIO — in particular /minio/* (health, admin API),
+    # bucket listing, DELETE and any other bucket. Before this block the
+    # whole S3 + admin API was reachable here for anyone holding a key,
+    # which made the firewall on :9000 pointless.
+    #
+    # POST is allowed only so that a future presigned multipart
+    # create/complete through this proxy keeps working; the browser does
+    # not use it today. OPTIONS is the CORS preflight MinIO answers.
+    #
+    # If the bucket name or an upload prefix ever changes, change it here
+    # too (the README lists this as the one thing to keep in step).
+    location ~ ^/movies/(videos|subtitles|temp|documents)/ {
+        limit_except PUT POST OPTIONS {
+            deny all;
+        }
+
         proxy_pass http://storage_origin;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
@@ -73,9 +102,18 @@ server {
         # writes are never cacheable.
 
         # No CORS headers added here — MinIO itself answers
-        # Access-Control-* headers (including the PUT preflight) once its
-        # bucket CORS is configured (see MinioService.ensureCors()), so this
+        # Access-Control-* headers (including the PUT preflight) for the
+        # origins in MINIO_API_CORS_ALLOW_ORIGIN in
+        # storage-server/docker-compose.yml (bucket-level CORS is not used:
+        # PutBucketCors does not work against MinIO), so this
         # proxy only needs to pass PUT/OPTIONS through untouched, not
         # duplicate or override what MinIO already sends.
+    }
+
+    # Everything else — / , /minio/health/*, /minio/admin/*, the bucket
+    # root, other buckets, other prefixes — is answered here and never
+    # forwarded. Readers go through the cache server, not this port.
+    location / {
+        return 403;
     }
 }
