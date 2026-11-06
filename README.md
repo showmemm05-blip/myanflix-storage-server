@@ -15,7 +15,13 @@ docker compose up -d
 
 - MinIO API: `http://localhost:9000` (S3-compatible)
 - MinIO console: `http://localhost:9001` (log in with the credentials from `.env`)
-- Upload proxy: `http://localhost:8443` (presigned browser uploads only: `PUT`/`POST`/`OPTIONS` under `movies/{videos,subtitles,temp,documents}/`, 403 for everything else)
+- Upload proxy: `http://localhost:8443` (presigned browser uploads only: `PUT`/`POST`/`OPTIONS` under `movies/{videos,subtitles,temp,documents}/`, 403 for everything else; its `Server` header carries no nginx version — `server_tokens off` in `upload-proxy/nginx.conf`)
+
+Both containers carry a `healthcheck` (MinIO: its own `/minio/health/live`;
+the proxy: `nginx -t` plus one local `GET /`, answered 403 by nginx itself)
+and a 5 × 50 MB container-log cap; `docker compose ps` shows `(healthy)`.
+Docker does not restart an unhealthy container on its own — see
+`../backend/DOCKER.md`, "Health checks, start order and log rotation".
 
 ## Who may read the bucket
 
@@ -267,7 +273,10 @@ the command's exit code.
    `upload-proxy/templates/default.conf.template`, then
    `docker compose up -d --force-recreate upload-proxy`. Presigned admin
    uploads must still succeed afterwards (upload any small poster from the
-   admin app).
+   admin app). The same recreate picks up `upload-proxy/nginx.conf`
+   (`server_tokens off`, 2026-10-09): afterwards
+   `curl -sI localhost:8443/ | grep -i '^server:'` prints `Server: nginx`
+   with no version.
 2. **Bucket policy.** First, on each cache VPS, pull `../cacheserver` and
    `docker compose up -d --force-recreate cache`: the current template blanks
    the viewer's forwarded-IP headers, and without that MinIO would judge a

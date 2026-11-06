@@ -11,7 +11,8 @@
         "arn:aws:s3:::movies/videos/*/hls/*",
         "arn:aws:s3:::movies/audio/*/hls/*",
         "arn:aws:s3:::movies/subtitles/*",
-        "arn:aws:s3:::movies/books/*"
+        "arn:aws:s3:::movies/books/*",
+        "arn:aws:s3:::movies/ads/*"
       ],
       "Condition": {
         "IpAddress": {
